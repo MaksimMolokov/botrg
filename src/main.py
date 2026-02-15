@@ -368,8 +368,17 @@ class TelegramBotApplication:
             pass
 
     def _allowed_users_list(self) -> list[int]:
-        from .utils.config_utils import load_all_users_from_store
-        return load_all_users_from_store()
+        from .utils.config_utils import load_all_users_from_store, parse_allowed_users
+        store_users = load_all_users_from_store()
+        env_ids: list[int] = []
+        if self._settings.admin_id:
+            env_ids.append(self._settings.admin_id)
+        env_ids.extend(parse_allowed_users(self._settings.additional_admin_ids or ""))
+        env_ids.extend(parse_allowed_users(self._settings.initial_user_ids or ""))
+        for uid in env_ids:
+            if uid not in store_users:
+                store_users.append(uid)
+        return store_users
 
     async def _startup_notifier(self) -> None:
         """Отправляет и обновляет статус запуска сервиса в Telegram."""
@@ -517,8 +526,13 @@ class TelegramBotApplication:
     def _is_admin(self, user_id: int) -> bool:
         """Проверяет, является ли пользователь администратором."""
         try:
-            from .utils.config_utils import load_all_admins_from_store
+            from .utils.config_utils import load_all_admins_from_store, parse_allowed_users
             admin_ids = load_all_admins_from_store()
+            if self._settings.admin_id and self._settings.admin_id not in admin_ids:
+                admin_ids.append(self._settings.admin_id)
+            for uid in parse_allowed_users(self._settings.additional_admin_ids or ""):
+                if uid not in admin_ids:
+                    admin_ids.append(uid)
             return user_id in admin_ids
         except Exception:
             return False
@@ -526,12 +540,11 @@ class TelegramBotApplication:
     def _is_user_allowed(self, user_id: int) -> bool:
         """Проверка пользователя по белому списку.
 
-        Пользователь разрешен, если он в списке администраторов или обычных пользователей.
-        Пустой список означает отсутствие ограничений.
+        Пользователь разрешен, если он в списке администраторов или обычных пользователей
+        (из JSON и из .env). Пустой список означает отсутствие ограничений.
         """
         try:
-            from .utils.config_utils import load_all_users_from_store
-            allowed = load_all_users_from_store()
+            allowed = self._allowed_users_list()
             return True if not allowed else (user_id in allowed)
         except Exception:
             return True
@@ -560,6 +573,21 @@ async def main() -> None:
         store.save(initial_config)
         json_config = initial_config
         logging.info(f"Инициализирован первичный администратор с ID: {settings.admin_id}")
+    elif json_config:
+        # Синхронизация .env → JSON: если в .env заданы права, а в JSON пусто — дописываем
+        updated = False
+        if settings.admin_id and not json_config.get("ADMIN_ID"):
+            json_config["ADMIN_ID"] = settings.admin_id
+            updated = True
+        if (settings.additional_admin_ids or "").strip() and not (str(json_config.get("ADDITIONAL_ADMIN_IDS") or "").strip():
+            json_config["ADDITIONAL_ADMIN_IDS"] = settings.additional_admin_ids or ""
+            updated = True
+        if (settings.initial_user_ids or "").strip() and not (str(json_config.get("INITIAL_USER_IDS") or "").strip():
+            json_config["INITIAL_USER_IDS"] = settings.initial_user_ids or ""
+            updated = True
+        if updated:
+            store.save(json_config)
+            logging.info("Список пользователей и администраторов обновлён из .env")
     
     # Обновляем настройки из JSON (с приоритетом JSON над .env)
     if "EMBEDDINGS_MODEL" in json_config and json_config["EMBEDDINGS_MODEL"]:
