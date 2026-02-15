@@ -19,6 +19,12 @@ class Settings(BaseSettings):
     embeddings_provider: Optional[str] = Field(default=None, alias="EMBEDDINGS_PROVIDER")
     embeddings_endpoint: Optional[str] = Field(default=None, alias="EMBEDDINGS_ENDPOINT")
     embeddings_model: Optional[str] = Field(default=None, alias="EMBEDDINGS_MODEL")
+    # Новые параметры для управления правами доступа
+    admin_id: Optional[int] = Field(default=None, alias="ADMIN_ID")
+    additional_admin_ids: Optional[str] = Field(default=None, alias="ADDITIONAL_ADMIN_IDS")
+    initial_user_ids: Optional[str] = Field(default=None, alias="INITIAL_USER_IDS")
+    
+    # Устаревшие параметры (для обратной совместимости)
     allowed_users: Optional[str] = Field(default=None, alias="ALLOWED_USERS")
     admin_users: Optional[str] = Field(default=None, alias="ALLOWED_ADMIN_IDS")
     regular_users: Optional[str] = Field(default=None, alias="ALLOWED_USER_IDS")

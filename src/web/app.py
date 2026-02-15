@@ -73,15 +73,22 @@ class SettingsWebApp:
                                           'OPENAI_ORGANIZATION', 'OPENAI_RESPONSE_MODEL', 
                                           'ALLOWED_USERS', 'HISTORY_MAX_PAIRS']):
             # Загружаем текущие списки пользователей
-            from ..config_store import get_admin_users, get_regular_users
-            admins = get_admin_users(self._store)
-            regulars = get_regular_users(self._store)
+            from ..config_store import get_all_admins, get_all_regular_users, get_primary_admin
+            
+            primary = get_primary_admin(self._store)
+            all_admins = get_all_admins(self._store)
+            all_regulars = get_all_regular_users(self._store)
+            
+            # Разделяем админов на первичного и дополнительных
+            additional_admins = [a for a in all_admins if a != str(primary)]
             
             # Если поля RBAC отсутствуют или пустые, включаем их из текущих значений
-            if 'ALLOWED_ADMIN_IDS' not in body or (body.get('ALLOWED_ADMIN_IDS') == '' and admins):
-                body['ALLOWED_ADMIN_IDS'] = ','.join(admins) if admins else ''
-            if 'ALLOWED_USER_IDS' not in body or (body.get('ALLOWED_USER_IDS') == '' and regulars):
-                body['ALLOWED_USER_IDS'] = ','.join(regulars) if regulars else ''
+            if 'ADMIN_ID' not in body and primary:
+                body['ADMIN_ID'] = primary
+            if 'ADDITIONAL_ADMIN_IDS' not in body:
+                body['ADDITIONAL_ADMIN_IDS'] = ','.join(additional_admins) if additional_admins else ''
+            if 'INITIAL_USER_IDS' not in body:
+                body['INITIAL_USER_IDS'] = ','.join(all_regulars) if all_regulars else ''
         
         # Обновляем только переданные поля, сохраняя остальные неизмененными
         for key, value in body.items():
@@ -99,12 +106,17 @@ class SettingsWebApp:
 
     async def _get_users(self, request: web.Request) -> web.Response:
         """Получить список администраторов и обычных пользователей."""
-        from ..config_store import get_admin_users, get_regular_users
+        from ..config_store import get_all_admins, get_all_regular_users
 
-        admins = get_admin_users(self._store)
-        regulars = get_regular_users(self._store)
+        admins = get_all_admins(self._store)
+        regulars = get_all_regular_users(self._store)
+        
+        # Получаем первичного администратора отдельно
+        primary = self._store.load().get("ADMIN_ID")
+        
         return web.json_response({
             "ok": True,
+            "primary_admin": primary,
             "admins": admins,
             "regular_users": regulars
         })
@@ -124,28 +136,51 @@ class SettingsWebApp:
             return web.json_response({"ok": False, "error": "Invalid user_id"})
 
         cfg_data = self._store.load()
-        current_admins = cfg_data.get("ALLOWED_ADMIN_IDS", "")
-        current_users = cfg_data.get("ALLOWED_USER_IDS", "")
+        
+        # Получаем текущие списки из новых параметров
+        current_additional = cfg_data.get("ADDITIONAL_ADMIN_IDS", "")
+        current_users = cfg_data.get("INITIAL_USER_IDS", "")
+        
+        # Для обратной совместимости: читаем устаревшие параметры
+        legacy_admins = cfg_data.get("ALLOWED_ADMIN_IDS", "")
+        legacy_users = cfg_data.get("ALLOWED_USER_IDS", "")
+        
+        # Проверяем первичного администратора
+        primary = str(cfg_data.get("ADMIN_ID", ""))
+        if primary == str(user_id):
+            return web.json_response({"ok": False, "error": "User is already primary admin"})
 
         if role == "admin":
-            # Добавляем в список администраторов
-            admins = current_admins.split(",") if current_admins else []
-            if str(user_id) not in admins:
-                admins.append(str(user_id))
-                cfg_data["ALLOWED_ADMIN_IDS"] = ",".join(admins)
-                self._store.save(cfg_data)
-                return web.json_response({"ok": True, "message": f"Admin {user_id} added"})
-            return web.json_response({"ok": False, "error": "User already exists"})
+            # Добавляем в список дополнительных администраторов
+            additional = current_additional.split(",") if current_additional else []
+            # Проверяем в новых параметрах
+            if str(user_id) in additional:
+                return web.json_response({"ok": False, "error": "User already exists"})
+            # Проверяем в устаревших параметрах (для обратной совместимости)
+            legacy_admin_list = legacy_admins.split(",") if legacy_admins else []
+            if str(user_id) in legacy_admin_list:
+                return web.json_response({"ok": False, "error": "User already exists"})
+            
+            additional.append(str(user_id))
+            cfg_data["ADDITIONAL_ADMIN_IDS"] = ",".join(additional)
+            self._store.save(cfg_data)
+            return web.json_response({"ok": True, "message": f"Admin {user_id} added"})
 
         elif role == "user":
             # Добавляем в список обычных пользователей
             users = current_users.split(",") if current_users else []
-            if str(user_id) not in users:
-                users.append(str(user_id))
-                cfg_data["ALLOWED_USER_IDS"] = ",".join(users)
-                self._store.save(cfg_data)
-                return web.json_response({"ok": True, "message": f"User {user_id} added"})
-            return web.json_response({"ok": False, "error": "User already exists"})
+            # Проверяем в новых параметрах
+            if str(user_id) in users:
+                return web.json_response({"ok": False, "error": "User already exists"})
+            # Проверяем в устаревших параметрах (для обратной совместимости)
+            legacy_user_list = legacy_users.split(",") if legacy_users else []
+            if str(user_id) in legacy_user_list:
+                return web.json_response({"ok": False, "error": "User already exists"})
+            
+            users.append(str(user_id))
+            cfg_data["INITIAL_USER_IDS"] = ",".join(users)
+            self._store.save(cfg_data)
+            return web.json_response({"ok": True, "message": f"User {user_id} added"})
         else:
             return web.json_response({"ok": False, "error": "Role must be 'admin' or 'user'"})
 
@@ -158,25 +193,60 @@ class SettingsWebApp:
             return web.json_response({"ok": False, "error": "user_id required"})
 
         cfg_data = self._store.load()
-        current_admins = cfg_data.get("ALLOWED_ADMIN_IDS", "")
-        current_users = cfg_data.get("ALLOWED_USER_IDS", "")
+        
+        # Получаем текущие списки из новых параметров
+        current_additional = cfg_data.get("ADDITIONAL_ADMIN_IDS", "")
+        current_users = cfg_data.get("INITIAL_USER_IDS", "")
+        
+        # Для обратной совместимости: читаем устаревшие параметры
+        legacy_admins = cfg_data.get("ALLOWED_ADMIN_IDS", "")
+        legacy_users = cfg_data.get("ALLOWED_USER_IDS", "")
+        
+        # Проверяем первичного администратора - его нельзя удалить
+        primary = str(cfg_data.get("ADMIN_ID", ""))
+        if primary == user_id and role == "admin":
+            return web.json_response({"ok": False, "error": "Cannot remove primary admin"})
 
         if role == "admin":
-            # Удаляем из списка администраторов
-            admins = current_admins.split(",") if current_admins else []
-            if user_id in admins:
-                admins.remove(user_id)
-                cfg_data["ALLOWED_ADMIN_IDS"] = ",".join(admins)
+            # Проверяем и удаляем из новых параметров
+            additional = current_additional.split(",") if current_additional else []
+            removed = False
+            
+            if user_id in additional:
+                additional.remove(user_id)
+                cfg_data["ADDITIONAL_ADMIN_IDS"] = ",".join(additional)
+                removed = True
+            else:
+                # Проверяем в устаревших параметрах (для обратной совместимости)
+                legacy_admin_list = legacy_admins.split(",") if legacy_admins else []
+                if user_id in legacy_admin_list:
+                    legacy_admin_list.remove(user_id)
+                    cfg_data["ALLOWED_ADMIN_IDS"] = ",".join(legacy_admin_list)
+                    removed = True
+            
+            if removed:
                 self._store.save(cfg_data)
                 return web.json_response({"ok": True, "message": f"Admin {user_id} removed"})
             return web.json_response({"ok": False, "error": "User not found"})
 
         elif role == "user":
-            # Удаляем из списка обычных пользователей
+            # Проверяем и удаляем из новых параметров
             users = current_users.split(",") if current_users else []
+            removed = False
+            
             if user_id in users:
                 users.remove(user_id)
-                cfg_data["ALLOWED_USER_IDS"] = ",".join(users)
+                cfg_data["INITIAL_USER_IDS"] = ",".join(users)
+                removed = True
+            else:
+                # Проверяем в устаревших параметрах (для обратной совместимости)
+                legacy_user_list = legacy_users.split(",") if legacy_users else []
+                if user_id in legacy_user_list:
+                    legacy_user_list.remove(user_id)
+                    cfg_data["ALLOWED_USER_IDS"] = ",".join(legacy_user_list)
+                    removed = True
+            
+            if removed:
                 self._store.save(cfg_data)
                 return web.json_response({"ok": True, "message": f"User {user_id} removed"})
             return web.json_response({"ok": False, "error": "User not found"})
@@ -278,6 +348,11 @@ class SettingsWebApp:
             "__RETRIEVAL_TOP_K__": _val(eff.retrieval_top_k),
             "__ALLOWED_USERS__": _val(getattr(eff, "allowed_users", "")),
             "__HISTORY_MAX_PAIRS__": _val(getattr(eff, "history_max_pairs", 10)),
+            # Новые параметры для прав доступа
+            "__ADMIN_ID__": _val(getattr(eff, "admin_id", "")),
+            "__ADDITIONAL_ADMIN_IDS__": _val(getattr(eff, "additional_admin_ids", "")),
+            "__INITIAL_USER_IDS__": _val(getattr(eff, "initial_user_ids", "")),
+            # Устаревшие параметры для обратной совместимости
             "__ALLOWED_ADMIN_IDS__": _val(getattr(eff, "admin_users", "")),
             "__ALLOWED_USER_IDS__": _val(getattr(eff, "regular_users", "")),
         }
@@ -629,6 +704,10 @@ class SettingsWebApp:
                 "OPENAI_RESPONSE_MODEL": "LLM модель для генерации ответов",
                 "EMBEDDINGS_MODEL": "Модель эмбеддингов в Ollama",
                 "ALLOWED_USERS": "Белый список пользователей, которым разрешён доступ",
+                # Новые параметры для прав доступа
+                "ADMIN_ID": "Первичный администратор",
+                "ADDITIONAL_ADMIN_IDS": "Дополнительные администраторы",
+                "INITIAL_USER_IDS": "Обычные пользователи",
             }
 
             # вычислим отличающиеся ключи (только те, что мы показываем)

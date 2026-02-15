@@ -368,12 +368,8 @@ class TelegramBotApplication:
             pass
 
     def _allowed_users_list(self) -> list[int]:
-        from .utils.config_utils import load_allowed_users_from_store, parse_allowed_users
-        users = load_allowed_users_from_store()
-        if users:
-            return users
-        # fallback к .env
-        return parse_allowed_users(str(self._settings.allowed_users or ""))
+        from .utils.config_utils import load_all_users_from_store
+        return load_all_users_from_store()
 
     async def _startup_notifier(self) -> None:
         """Отправляет и обновляет статус запуска сервиса в Telegram."""
@@ -521,19 +517,21 @@ class TelegramBotApplication:
     def _is_admin(self, user_id: int) -> bool:
         """Проверяет, является ли пользователь администратором."""
         try:
-            from .config_store import get_admin_users
-            admin_ids = get_admin_users(self._store)
-            return str(user_id) in admin_ids
+            from .utils.config_utils import load_all_admins_from_store
+            admin_ids = load_all_admins_from_store()
+            return user_id in admin_ids
         except Exception:
             return False
 
     def _is_user_allowed(self, user_id: int) -> bool:
         """Проверка пользователя по белому списку.
 
+        Пользователь разрешен, если он в списке администраторов или обычных пользователей.
         Пустой список означает отсутствие ограничений.
         """
         try:
-            allowed = set(self._allowed_users_list())
+            from .utils.config_utils import load_all_users_from_store
+            allowed = load_all_users_from_store()
             return True if not allowed else (user_id in allowed)
         except Exception:
             return True
@@ -551,6 +549,18 @@ async def main() -> None:
     store = ConfigStore(store_path)
     json_config = store.load()
     
+    # Инициализация первичного администратора при первом запуске
+    if not json_config and settings.admin_id:
+        # Если JSON конфиг отсутствует, создаем его с первичным администратором
+        initial_config = {
+            "ADMIN_ID": settings.admin_id,
+            "ADDITIONAL_ADMIN_IDS": settings.additional_admin_ids or "",
+            "INITIAL_USER_IDS": settings.initial_user_ids or "",
+        }
+        store.save(initial_config)
+        json_config = initial_config
+        logging.info(f"Инициализирован первичный администратор с ID: {settings.admin_id}")
+    
     # Обновляем настройки из JSON (с приоритетом JSON над .env)
     if "EMBEDDINGS_MODEL" in json_config and json_config["EMBEDDINGS_MODEL"]:
         settings.embeddings_model = json_config["EMBEDDINGS_MODEL"]
@@ -564,6 +574,14 @@ async def main() -> None:
         settings.openai_response_model = json_config["OPENAI_RESPONSE_MODEL"]
     if "ALLOWED_USERS" in json_config and json_config["ALLOWED_USERS"]:
         settings.allowed_users = json_config["ALLOWED_USERS"]
+    # Новые параметры для прав доступа
+    if "ADMIN_ID" in json_config and json_config["ADMIN_ID"]:
+        settings.admin_id = json_config["ADMIN_ID"]
+    if "ADDITIONAL_ADMIN_IDS" in json_config and json_config["ADDITIONAL_ADMIN_IDS"]:
+        settings.additional_admin_ids = json_config["ADDITIONAL_ADMIN_IDS"]
+    if "INITIAL_USER_IDS" in json_config and json_config["INITIAL_USER_IDS"]:
+        settings.initial_user_ids = json_config["INITIAL_USER_IDS"]
+    # Устаревшие параметры для обратной совместимости
     if "ALLOWED_ADMIN_IDS" in json_config and json_config["ALLOWED_ADMIN_IDS"]:
         settings.admin_users = json_config["ALLOWED_ADMIN_IDS"]
     if "ALLOWED_USER_IDS" in json_config and json_config["ALLOWED_USER_IDS"]:

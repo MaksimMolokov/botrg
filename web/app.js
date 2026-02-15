@@ -105,13 +105,15 @@ async function refreshLLMModels() {
 
 async function saveConfig() {
   // Сначала загружаем текущие списки пользователей
-  let adminUsers = '';
+  let primaryAdmin = '';
+  let additionalAdmins = '';
   let regularUsers = '';
   try {
     const res = await fetch('/api/admin/users');
     const json = await res.json();
     if (json.ok) {
-      adminUsers = json.admins.join(',');
+      primaryAdmin = json.primary_admin || '';
+      additionalAdmins = json.admins.filter(a => a !== primaryAdmin).join(',');
       regularUsers = json.regular_users.join(',');
     }
   } catch (_) {
@@ -130,8 +132,13 @@ async function saveConfig() {
     OPENAI_ORGANIZATION: document.getElementById('OPENAI_ORGANIZATION').value,
     OPENAI_RESPONSE_MODEL: document.getElementById('OPENAI_RESPONSE_MODEL').value,
     ALLOWED_USERS: document.getElementById('ALLOWED_USERS').value,
-    ALLOWED_ADMIN_IDS: adminUsers,
-    ALLOWED_USER_IDS: regularUsers,
+    // Новые параметры для прав доступа
+    ADMIN_ID: primaryAdmin,
+    ADDITIONAL_ADMIN_IDS: additionalAdmins,
+    INITIAL_USER_IDS: regularUsers,
+    // Устаревшие параметры для обратной совместимости
+    ALLOWED_ADMIN_IDS: '',
+    ALLOWED_USER_IDS: '',
     HISTORY_MAX_PAIRS: (function () {
       const v = Number(document.getElementById('HISTORY_MAX_PAIRS').value || 10);
       if (!Number.isFinite(v)) return 10;
@@ -574,7 +581,68 @@ function renderStaticUsersLists(admins, regulars) {
     }
   }
 
-  // Добавить пользователей прямым нажатием кнопки
+  // Добавление пользователей (удаление)
+  async function removeUser(userId, role) {
+    if (!confirm(`Удалить пользователя ${userId}?`)) return;
+    try {
+      const res = await fetch(`/api/admin/users/${userId}?role=${role}`, {
+        method: 'DELETE',
+      });
+      const json = await res.json();
+      if (res.ok && json.ok) {
+        toast(json.message || 'Пользователь удалён', true);
+        loadUsers();
+      } else {
+        toast(json.error || 'Ошибка удаления', false);
+      }
+    } catch (_) {
+      toast('Ошибка сети', false);
+    }
+  }
+
+  // Добавление пользователей прямым нажатием кнопки
+  async function addAdmins() {
+    const idsInput = document.getElementById('admin-ids-input').value;
+    const userIds = cleanUserIds(idsInput);
+    
+    if (userIds.length === 0) {
+      toast('Введите хотя бы один ID', false);
+      return;
+    }
+
+    let addedCount = 0;
+    let errorCount = 0;
+
+    for (const userId of userIds) {
+      try {
+        const res = await fetch('/api/admin/users', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ role: 'admin', user_id: userId }),
+        });
+        const json = await res.json();
+        if (res.ok && json.ok) {
+          addedCount++;
+        } else {
+          errorCount++;
+        }
+      } catch (_) {
+        errorCount++;
+      }
+    }
+
+    if (addedCount > 0) {
+      toast(`Добавлено администраторов: ${addedCount}`, true);
+    }
+    if (errorCount > 0) {
+      setTimeout(() => toast(`Не удалось добавить: ${errorCount}`, false), 500);
+    }
+
+    loadUsers();
+    document.getElementById('admin-ids-input').value = '';
+  }
+
+  // Добавление пользователей прямым нажатием кнопки
   async function addUsers() {
     const idsInput = document.getElementById('user-ids-input').value;
     const userIds = cleanUserIds(idsInput);
@@ -618,7 +686,7 @@ function renderStaticUsersLists(admins, regulars) {
 
   // Загружаем список пользователей при инициализации
   loadUsers();
-  
+
   // Обработчики кнопок добавления пользователей
   document.getElementById('save-admin-btn')?.addEventListener('click', addAdmins);
   document.getElementById('save-user-btn')?.addEventListener('click', addUsers);

@@ -24,6 +24,11 @@ class ResolvedSettings:
         openai_response_model: Optional[str],
         allowed_users: Optional[str],
         history_max_pairs: int,
+        # Новые параметры для прав доступа
+        admin_id: Optional[int] = None,
+        additional_admin_ids: Optional[str] = None,
+        initial_user_ids: Optional[str] = None,
+        # Устаревшие параметры для обратной совместимости
         admin_users: Optional[str] = None,
         regular_users: Optional[str] = None,
     ) -> None:
@@ -41,6 +46,11 @@ class ResolvedSettings:
         self.openai_response_model = openai_response_model
         self.allowed_users = allowed_users or ""
         self.history_max_pairs = int(history_max_pairs)
+        # Новые параметры
+        self.admin_id = admin_id
+        self.additional_admin_ids = additional_admin_ids or ""
+        self.initial_user_ids = initial_user_ids or ""
+        # Устаревшие параметры для обратной совместимости
         self.admin_users = admin_users or ""
         self.regular_users = regular_users or ""
 
@@ -89,6 +99,56 @@ def get_regular_users(store: ConfigStore) -> List[str]:
     return parse_allowed_users(data.get("ALLOWED_USER_IDS", ""))
 
 
+def get_primary_admin(store: ConfigStore) -> Optional[str]:
+    """Возвращает ID первичного администратора."""
+    data = store.load()
+    admin_id = data.get("ADMIN_ID")
+    if admin_id:
+        return str(admin_id)
+    return None
+
+
+def get_all_admins(store: ConfigStore) -> List[str]:
+    """Возвращает список всех администраторов (первичный + дополнительные)."""
+    data = store.load()
+    admins = []
+    
+    # Добавляем первичного администратора
+    primary = data.get("ADMIN_ID")
+    if primary:
+        admins.append(str(primary))
+    
+    # Добавляем дополнительных администраторов
+    additional = parse_allowed_users(data.get("ADDITIONAL_ADMIN_IDS", ""))
+    admins.extend(additional)
+    
+    # Для обратной совместимости: читаем ALLOWED_ADMIN_IDS
+    legacy_admins = parse_allowed_users(data.get("ALLOWED_ADMIN_IDS", ""))
+    for admin in legacy_admins:
+        if admin not in admins:
+            admins.append(admin)
+    
+    return admins
+
+
+def get_all_regular_users(store: ConfigStore) -> List[str]:
+    """Возвращает список всех обычных пользователей."""
+    data = store.load()
+    users = []
+    
+    # Добавляем первичных пользователей
+    initial = parse_allowed_users(data.get("INITIAL_USER_IDS", ""))
+    users.extend(initial)
+    
+    # Для обратной совместимости: читаем ALLOWED_USER_IDS
+    legacy_users = parse_allowed_users(data.get("ALLOWED_USER_IDS", ""))
+    for user in legacy_users:
+        if user not in users:
+            users.append(user)
+    
+    return users
+
+
 def load_effective_settings(env_settings: Settings, store: ConfigStore) -> ResolvedSettings:
     """Формирует итоговые настройки из .env и JSON-конфига."""
 
@@ -130,6 +190,11 @@ def load_effective_settings(env_settings: Settings, store: ConfigStore) -> Resol
         openai_response_model=prefer_json(data.get("OPENAI_RESPONSE_MODEL"), env_settings.openai_response_model),
         allowed_users=prefer_json(data.get("ALLOWED_USERS"), env_settings.allowed_users),
         history_max_pairs=parse_history_limit(data.get("HISTORY_MAX_PAIRS")),
+        # Новые параметры для прав доступа: JSON приоритет иначе env
+        admin_id=prefer_json(data.get("ADMIN_ID"), env_settings.admin_id),
+        additional_admin_ids=prefer_json(data.get("ADDITIONAL_ADMIN_IDS"), env_settings.additional_admin_ids),
+        initial_user_ids=prefer_json(data.get("INITIAL_USER_IDS"), env_settings.initial_user_ids),
+        # Устаревшие параметры для обратной совместимости
         admin_users=prefer_json(data.get("ALLOWED_ADMIN_IDS"), env_settings.admin_users),
         regular_users=prefer_json(data.get("ALLOWED_USER_IDS"), env_settings.regular_users),
     )

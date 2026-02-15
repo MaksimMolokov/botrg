@@ -115,3 +115,75 @@ def load_regular_users_from_store() -> List[int]:
         return []
 
 
+def load_admin_id_from_store() -> Optional[int]:
+    """Загружает ID первичного администратора из JSON-конфига."""
+    try:
+        store_path = os.environ.get("APP_CONFIG_JSON", "/app/data/app-config.json")
+        cfg: Dict[str, Any] = ConfigStore(store_path).load()
+        admin_id = cfg.get("ADMIN_ID")
+        if admin_id is not None:
+            return int(admin_id)
+        return None
+    except Exception:
+        return None
+
+
+def load_all_admins_from_store() -> List[int]:
+    """Загружает список всех администраторов (первичный + дополнительные) из JSON-конфига."""
+    try:
+        store_path = os.environ.get("APP_CONFIG_JSON", "/app/data/app-config.json")
+        cfg: Dict[str, Any] = ConfigStore(store_path).load()
+        admins = []
+        
+        # Добавляем первичного администратора
+        primary = cfg.get("ADMIN_ID")
+        if primary is not None:
+            admins.append(int(primary))
+        
+        # Добавляем дополнительных администраторов
+        additional_str = str(cfg.get("ADDITIONAL_ADMIN_IDS", "") or "")
+        admins.extend(parse_allowed_users(additional_str))
+        
+        # Для обратной совместимости: читаем ALLOWED_ADMIN_IDS
+        legacy_str = str(cfg.get("ALLOWED_ADMIN_IDS", "") or "")
+        legacy_admins = parse_allowed_users(legacy_str)
+        for admin in legacy_admins:
+            if admin not in admins:
+                admins.append(admin)
+        
+        return admins
+    except Exception:
+        return []
+
+
+def load_all_users_from_store() -> List[int]:
+    """Загружает список всех пользователей (админы + обычные) из JSON-конфига."""
+    admins = load_all_admins_from_store()
+    users = []
+    
+    try:
+        store_path = os.environ.get("APP_CONFIG_JSON", "/app/data/app-config.json")
+        cfg: Dict[str, Any] = ConfigStore(store_path).load()
+        
+        # Добавляем первичных пользователей
+        initial_str = str(cfg.get("INITIAL_USER_IDS", "") or "")
+        users.extend(parse_allowed_users(initial_str))
+        
+        # Для обратной совместимости: читаем ALLOWED_USER_IDS
+        legacy_str = str(cfg.get("ALLOWED_USER_IDS", "") or "")
+        legacy_users = parse_allowed_users(legacy_str)
+        for user in legacy_users:
+            if user not in users:
+                users.append(user)
+        
+        # Объединяем с администраторами (без дубликатов)
+        all_users = admins.copy()
+        for user in users:
+            if user not in all_users:
+                all_users.append(user)
+        
+        return all_users
+    except Exception:
+        return admins
+
+
